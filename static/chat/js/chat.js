@@ -1,28 +1,38 @@
 function chat(element, user, options) {
 	this.server             = 'ws://' + location.host + ':' + options.port + '/ws';
 	this.connected          = false;
-	this.debug              = false;
+	this.debug              = true;
 	this.users              = [];
 	this.ignorelist         = {};
 	this.controlevents      = ["MUTE", "UNMUTE", "BAN", "UNBAN", "SUBONLY"];
-	this.errorstrings       = {
-		"nopermission"      : "You do not have the required permissions to use that",
-		"protocolerror"     : "Invalid or badly formatted",
-		"needlogin"         : "You have to be logged in to use that",
-		"invalidmsg"        : "The message was invalid",
-		"throttled"         : "Throttled! You were trying to send messages too fast",
-		"duplicate"         : "The message is identical to the last one you sent",
-		"muted"             : "You are muted",
-		"submode"           : "The channel is currently in subscriber only mode",
-		"needbanreason"     : "Providing a reason for the ban is mandatory",
-		"banned"            : "You have been banned, disconnecting",
-		"requiresocket"     : "This chat requires WebSockets",
-		"toomanyconnections": "Only 5 concurrent connections allowed",
-		"socketerror"       : "Error contacting server",
-		"notfound"          : "The user was not found"
-	};
 	this.user               = new ChatUser(user);
 	this.gui                = new ChatGui(element, this, options);
+
+	// set up the protocol and event helper
+	ProtoBuf = dcodeIO.ProtoBuf; // global by design
+	var builder = ProtoBuf.newBuilder("protocol");
+	builder.create(destinygg_chatprotocol.messages);
+	this.protocol = builder.build("protocol");
+	this.events = {};
+	var self = this;
+	$.each(this.protocol.Event.Event, function(k, v) {
+		self.events[v] = k;
+	});
+	this.errorstrings       = {};
+	this.errorstrings[this.protocol.Error.Error["NOPERMISSION"]]       = "You do not have the required permissions to use that";
+	this.errorstrings[this.protocol.Error.Error["PROTOCOLERROR"]]      = "Invalid or badly formatted";
+	this.errorstrings[this.protocol.Error.Error["NEEDLOGIN"]]          = "You have to be logged in to use that";
+	this.errorstrings[this.protocol.Error.Error["INVALIDMESSAGE"]]     = "The message was invalid";
+	this.errorstrings[this.protocol.Error.Error["THROTTLED"]]          = "Throttled! You were trying to send messages too fast";
+	this.errorstrings[this.protocol.Error.Error["DUPLICATE"]]          = "The message is identical to the last one you sent";
+	this.errorstrings[this.protocol.Error.Error["MUTED"]]              = "You are muted";
+	this.errorstrings[this.protocol.Error.Error["SUBMODE"]]            = "The channel is currently in subscriber only mode";
+	this.errorstrings[this.protocol.Error.Error["NEEDBANREASON"]]      = "Providing a reason for the ban is mandatory";
+	this.errorstrings[this.protocol.Error.Error["BANNED"]]             = "You have been banned, disconnecting";
+	this.errorstrings[this.protocol.Error.Error["NOWEBSOCKET"]]        = "This chat requires WebSockets";
+	this.errorstrings[this.protocol.Error.Error["TOOMANYCONNECTIONS"]] = "Only 5 concurrent connections allowed";
+	this.errorstrings[this.protocol.Error.Error["SOCKETERROR"]]        = "Error contacting server";
+	this.errorstrings[this.protocol.Error.Error["NOTFOUND"]]           = "The user was not found";
 	return this;
 };
 chat.prototype.start = function(){
@@ -39,8 +49,11 @@ chat.prototype.start = function(){
 		if (str.substring(0, 1) === '/')
 			return this.engine.handleCommand(str.substring(1));
 
-		this.push(new ChatUserMessage(str, this.engine.user), (!this.engine.connected) ? 'unsent' : 'pending');
-		this.engine.emit('MSG', {data: str});
+		this.push(new ChatUserMessage(str, this.engine.user), !this.engine.connected ? 'unsent' : 'pending');
+		this.engine.emit(new this.engine.protocol.Event({
+			event: "MESSAGE",
+			message: {message: str}
+		}));
 	};
 	
 	this.gui.loadBacklog();
@@ -58,18 +71,23 @@ chat.prototype.l = function() {
 };
 chat.prototype.init = function() {
 	this.sock           = new WebSocket(this.server);
+	this.sock.binaryType = "arraybuffer";
 	this.sock.onopen    = $.proxy(function() {
-		var event = {data: 'OPEN ""'};
-		this.parseAndDispatch(event)
+		this.parseAndDispatch(new this.protocol.Event({
+			event: "OPEN"
+		}));
 	}, this);
 	this.sock.onerror   = $.proxy(function() {
-		var event = {data: 'ERR "socketerror"'};
-		this.parseAndDispatch(event)
+		this.parseAndDispatch(new this.protocol.Event({
+			event: "ERROR",
+			error: {error: "SOCKETERROR"}
+		}));
 	}, this);
 	this.sock.onmessage = $.proxy(this.parseAndDispatch, this);
 	this.sock.onclose   = $.proxy(function() {
-		var event = {data: 'CLOSE ""'};
-		this.parseAndDispatch(event)
+		this.parseAndDispatch(new this.protocol.Event({
+			event: "CLOSE"
+		}));
 	}, this);
 	
 	this.l = $.proxy(this.l, this);
@@ -83,14 +101,17 @@ chat.prototype.loadIgnoreList = function() {
 };
 
 // websocket stuff
-chat.prototype.parseAndDispatch = function(e) {
-	var eventname = e.data.split(' ', 1)[0],
-			handler   = 'on' + eventname,
-			obj       = JSON.parse(e.data.substring(eventname.length+1));
+chat.prototype.parseAndDispatch = function(event) {
+
+	var e         = (event instanceof ArrayBuffer)? this.protocol.Event.decode(event.data): event,
+	    eventname = this.events[e.event],
+	    handler   = 'on' + eventname,
+	    obj       = e[eventname.toLowerCase()] || null;
 	
 	this.l(handler, obj);
 	if (eventname == 'PING') { // handle pinging in-line, cant parse 64bit ints
-		return this.sock.send('PONG ' + e.data.substring(eventname.length+1));
+		e.event = this.protocol.Event.Event["PONG"];
+		return this.sock.send(e.toArrayBuffer());
 	}
 	
 	if (this[handler]) {
@@ -117,8 +138,8 @@ chat.prototype.dispatchBacklog = function(e) {
 		return this[handler](obj);
 	
 };
-chat.prototype.emit = function(eventname, data) {
-	this.sock.send(eventname + " " + JSON.stringify(data));
+chat.prototype.emit = function(event) {
+	this.sock.send(event.toArrayBuffer());
 };
 
 // server events
@@ -208,11 +229,12 @@ chat.prototype.onUNBAN = function(data) {
 	
 	return new ChatCommandMessage(suppressednick + " unbanned by " + data.nick, data.timestamp);
 };
-chat.prototype.onERR = function(data) {
-	if (data == "toomanyconnections" || data == "banned")
+chat.prototype.onERROR = function(data) {
+	if (data.error == this.protocol.Error.Error["TOOMANYCONNECTIONS"] ||
+		  data.error == this.protocol.Error.Error["BANNED"])
 		this.dontconnect = true;
 	
-	return new ChatErrorMessage(this.errorstrings[data]);
+	return new ChatErrorMessage(this.errorstrings[data.error]);
 };
 chat.prototype.onREFRESH = function() {
 	window.location.href = window.location.href;
@@ -255,8 +277,9 @@ chat.prototype.handleCommand = function(str) {
 			break;
 			
 		case "me":
-			payload.data = "/" + str;
-			this.emit("MSG", payload);
+			payload.event   = "MESSAGE";
+			payload.message = {message: "/" + str};
+			this.emit(new this.protocol.Event(payload));
 			break;
 			
 		case "ignore":
@@ -326,11 +349,14 @@ chat.prototype.handleCommand = function(str) {
 			if (parts[2])
 				duration = this.parseTimeInterval(parts[2])
 			
-			payload.data = parts[1];
+			payload.event = "MUTE";
+			payload.mute  = {
+				targetnick: parts[1]
+			};
 			if (duration && duration > 0)
-				payload.duration = duration;
+				payload.mute.duration = duration;
 			
-			this.emit(command.toUpperCase(), payload);
+			this.emit(new this.protocol.Event(payload));
 			break;
 			
 		case "ban":
@@ -345,22 +371,26 @@ chat.prototype.handleCommand = function(str) {
 				return;
 			}
 			
-			payload.nick = parts[1];
+			payload.event = "BAN";
+			payload.ban   = {
+				targetnick: parts[1]
+			};
+
 			if (command == "ipban")
-				payload.banip = true;
+				payload.ban.banip = true;
 			
 			if (/^perm/i.test(parts[2]))
-				payload.ispermanent = true;
+				payload.ban.ispermanent = true;
 			else
-				payload.duration = this.parseTimeInterval(parts[2]);
+				payload.ban.duration = this.parseTimeInterval(parts[2]);
 			
-			payload.reason = parts.slice(3, parts.length).join(' ');
-			if (!payload.reason) {
+			payload.ban.reason = parts.slice(3, parts.length).join(' ');
+			if (!payload.ban.reason) {
 				this.gui.push(new ChatErrorMessage("Providing a reason is mandatory"));
 				return;
 			}
 			
-			this.emit("BAN", payload);
+			this.emit(new this.protocol.Event(payload));
 			break;
 			
 		case "unmute":
@@ -375,18 +405,33 @@ chat.prototype.handleCommand = function(str) {
 				return;
 			}
 			
-			payload.data = parts[1];
-			this.emit(command.toUpperCase(), payload);
+			if (command == "unmute") {
+				payload.event  = "UNMUTE";
+				payload.unmute = {
+					targetnick: parts[1]
+				};
+			} else {
+				payload.event = "UNBAN";
+				payload.unban = {
+					targetnick: parts[1]
+				};
+			}
+
+			this.emit(new this.protocol.Event(payload));
 			break;
 		
 		case "subonly":
 			if (parts[1] != 'on' && parts[1] != 'off') {
 				this.gui.push(new ChatErrorMessage("Invalid argument - /" + command + " on/off"));
 				return;
-			}
-			
-			payload.data = parts[1];
-			this.emit(command.toUpperCase(), payload);
+			} else if (parts[1] == 'on')
+				var mode = "SUBONLY";
+			else
+				var mode = "UNSUBONLY";
+
+			payload.event = "MODE";
+			payload.mode  = {mode: mode};
+			this.emit(new this.protocol.Event(payload));
 			break;
 			
 		case "maxlines":

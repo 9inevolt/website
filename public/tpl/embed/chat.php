@@ -197,6 +197,9 @@ use Destiny\Common\Config;
 <script src="<?=Config::cdnv()?>/chat/js/scroll.mCustom.js"></script>
 <script src="<?=Config::cdnv()?>/chat/js/chat.menu.js"></script>
 <script src="<?=Config::cdnv()?>/chat/js/formatters.js"></script>
+<script src="<?=Config::cdnv()?>/chat/js/protocol.js"></script>
+<script src="<?=Config::cdnv()?>/chat/js/ByteBuffer.min.js"></script>
+<script src="<?=Config::cdnv()?>/chat/js/ProtoBuf.noparse.min.js"></script>
 <script src="<?=Config::cdnv()?>/chat/js/gui.js"></script>
 <script src="<?=Config::cdnv()?>/chat/js/chat.js"></script>
 <?php endif; ?>
