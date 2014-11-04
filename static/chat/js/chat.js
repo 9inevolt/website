@@ -18,7 +18,7 @@ destiny.UserFeatures = {
 };
 
 function chat(element, user, options) {
-	this.server             = 'ws://' + options.host + ':' + options.port + '/ws';
+	this.server             = 'ws://' + options.host + ':' + options.port + '/ws?room=' + options.room;
 	this.connected          = false;
 	this.debug              = false;
 	this.users              = [];
