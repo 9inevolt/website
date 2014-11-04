@@ -259,6 +259,7 @@
 .chat-theme-dark {
   background: #080808;
   border-radius: 0;
+  color: #999;
 }
 .chat-theme-dark .chat-input-wrap {
   border:none;
